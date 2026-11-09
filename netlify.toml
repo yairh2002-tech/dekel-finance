@@ -1,3 +1,4 @@
+# Netlify publishes this folder as is: index.html is the whole site.
 [build]
   publish = "."
   command = ""
