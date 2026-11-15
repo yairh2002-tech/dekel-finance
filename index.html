@@ -481,7 +481,34 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   window.__blobUrl = () => '';
   const downloads = {async save(r) { const blob = r.data instanceof Blob ? r.data : new Blob([r.data], {type: r.mimeType || 'text/plain;charset=utf-8'}); const u = URL.createObjectURL(blob), a = document.createElement('a'); a.href = u; a.download = r.filename || 'file'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); return {status: 'saved'}; }};
   const user = {can: async () => true, isOwner: async () => true, id: async () => email};
-  const caps = {db, assets, downloads, user};
+  /* reading invoices: images go to a Netlify function that checks the sign-in and asks Claude */
+  const toJpeg = async blob => {
+    try {
+      const bmp = await createImageBitmap(blob), k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height)), c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      const out = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+      return out || blob;
+    } catch (e) { return blob; }
+  };
+  const b64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+  async function ask(prompt, o, asJson) {
+    o = o || {};
+    const {data: {session}} = await sb.auth.getSession();
+    if (!session) throw {code: 'session_expired'};
+    const images = [];
+    for (const im of (o.images || []).slice(0, 2)) { const j = await toJpeg(im); images.push({type: j.type || 'image/jpeg', data: await b64(j)}); }
+    let r;
+    try { r = await fetch('/.netlify/functions/claude', {method: 'POST', signal: o.signal, headers: {'content-type': 'application/json', authorization: 'Bearer ' + session.access_token}, body: JSON.stringify({prompt, images, json: !!asJson})}); }
+    catch (e) { throw {code: e && e.name === 'AbortError' ? 'cancelled' : 'unavailable'}; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw {code: d.code || (r.status === 404 ? 'not_declared' : 'unavailable'), message: d.message || ''};
+    return String(d.text || '');
+  }
+  const sample = async (prompt, o) => { const t = await ask(prompt, o, false); if (o && o.onText) o.onText({text: t}); return t; };
+  sample.json = async (prompt, o) => { const t = await ask(prompt, o, true), m = t.match(/\{[\s\S]*\}/); if (!m) throw {code: 'bad_output'}; return JSON.parse(m[0]); };
+  sample.limits = async () => ({images: {mediaTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif']}});
+  const caps = {db, assets, downloads, user, sample};
   window.claude = {use: async n => { await ready; return caps[n] || null; }};
   window.__SERVER__ = {email: () => email, signOut: async () => { await sb.auth.signOut(); location.reload(); }};
 })();
