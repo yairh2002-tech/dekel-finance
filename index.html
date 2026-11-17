@@ -511,7 +511,20 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     return String(d.text || '');
   }
   const sample = async (prompt, o) => { const t = await ask(prompt, o, false); if (o && o.onText) o.onText({text: t}); return t; };
-  sample.json = async (prompt, o) => { const t = await ask(prompt, o, true), m = t.match(/\{[\s\S]*\}/); try { if (m) return JSON.parse(m[0]); } catch (e) {} console.warn('invoice reading: no JSON in reply', t.slice(0, 300)); if (typeof toast === 'function') toast('קריאת החשבונית החזירה תשובה לא צפויה.'); throw {code: 'bad_output'}; };
+  sample.json = async (prompt, o) => {
+    const t = await ask(prompt, o, true);
+    // take the first {...} block that parses, scanning braces so trailing text does not break it
+    for (let i = t.indexOf('{'); i >= 0; i = t.indexOf('{', i + 1)) {
+      let depth = 0, inStr = false, esc = false;
+      for (let j = i; j < t.length; j++) {
+        const ch = t[j];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true; else if (ch === '{') depth++; else if (ch === '}' && --depth === 0) { try { return JSON.parse(t.slice(i, j + 1)); } catch (e) { break; } }
+      }
+    }
+    console.warn('invoice reading: no JSON in reply', t.slice(0, 300));
+    throw {code: 'bad_output', message: 'התשובה לא הייתה בפורמט הצפוי: ' + t.replace(/\s+/g, ' ').slice(0, 80)};
+  };
   sample.limits = async () => ({images: {mediaTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif']}});
   const caps = {db, assets, downloads, user, sample};
   window.claude = {use: async n => { await ready; return caps[n] || null; }};
@@ -2411,7 +2424,7 @@ function openEntry(entry, preset) {
       else if (c === 'rate_limited') m.note = 'הגעת למגבלת השימוש ב-Claude כרגע. ממלאים את הפרטים ידנית או מנסים שוב מאוחר יותר.';
       else if (c === 'session_expired') m.note = 'צריך להתחבר מחדש ל-Claude כדי לקרוא את הקובץ. בינתיים ממלאים ידנית.';
       else if (c === 'image_rejected' || c === 'images_unavailable') m.note = 'לא ניתן לקרוא את התמונה הזו. ממלאים את הפרטים ידנית.';
-      else { m.note = 'הפרטים לא זוהו בקובץ. ממלאים ידנית או מנסים שוב.'; m.retry = true; }
+      else { const why = x && x.message ? (x.message === 'timeout' ? 'הקריאה לקחה יותר מדי זמן' : String(x.message).slice(0, 160)) : (x && x.code === 'bad_output' ? 'התשובה לא הייתה בפורמט הצפוי' : ''); m.note = 'הפרטים לא זוהו בקובץ' + (why ? ' (' + why + ')' : '') + '. ממלאים ידנית או מנסים שוב.'; m.retry = true; }
     } finally {
       if (m.ctl === ctl) { m.busy = false; m.ctl = null; }
       if (dlg().contains($('#eFbox', d))) fbox();
