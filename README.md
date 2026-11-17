@@ -6,3 +6,5 @@
 - `netlify.toml` — הגדרות פרסום: בלי שלב בנייה, הקובץ מתפרסם כמו שהוא.
 
 עדכונים למערכת נעשים כאן, ו-Netlify מפרסם אותם תוך כדקה.
+
+קריאת חשבוניות: `netlify/functions/claude.mjs`, עם המפתח ANTHROPIC_API_KEY שמוגדר ב-Netlify.
