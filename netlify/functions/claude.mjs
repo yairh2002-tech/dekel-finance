@@ -14,11 +14,11 @@ export default async req => {
   if (!/^Bearer\s+\S+$/.test(auth)) return json({code: 'session_expired'}, 401);
   const sb = {apikey: SB_KEY, authorization: auth};
   try {
-    const u = await fetch(SB_URL + '/auth/v1/user', {headers: sb});
-    if (!u.ok) return json({code: 'session_expired'}, 401);
+    // one call checks both the sign-in token and membership: an invalid token is refused by Supabase
     const m = await fetch(SB_URL + '/rest/v1/rpc/is_member', {method: 'POST', headers: {...sb, 'content-type': 'application/json'}, body: '{}'});
+    if (m.status === 401) return json({code: 'session_expired'}, 401);
     if (!m.ok || (await m.json()) !== true) return json({code: 'not_granted'}, 403);
-  } catch (e) { return json({code: 'unavailable', message: 'sign-in check failed'}, 502); }
+  } catch (e) { console.error('membership check failed', e); return json({code: 'unavailable', message: 'sign-in check failed'}, 502); }
 
   let body;
   try { body = await req.json(); } catch (e) { return json({code: 'bad_request'}, 400); }
@@ -30,17 +30,20 @@ export default async req => {
   content.push({type: 'text', text: prompt});
 
   let r, d;
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 9000); // Netlify stops functions at 10 seconds
   try {
     r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
+      method: 'POST', signal: ctl.signal,
       headers: {'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
       body: JSON.stringify({model: process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5', max_tokens: body.json ? 600 : 1200, messages: [{role: 'user', content}]})
     });
     d = await r.json().catch(() => ({}));
-  } catch (e) { return json({code: 'unavailable', message: 'Anthropic API unreachable'}, 502); }
+  } catch (e) { console.error('anthropic call failed', e); return json({code: 'unavailable', message: e && e.name === 'AbortError' ? 'timeout' : 'Anthropic API unreachable'}, 504); }
+  finally { clearTimeout(timer); }
+  if (!r.ok) console.error('anthropic error', r.status, JSON.stringify(d).slice(0, 500));
   if (r.status === 429 || r.status === 529) return json({code: 'rate_limited'}, 429);
   if (r.status === 401 || r.status === 403) return json({code: 'not_declared', message: 'The Anthropic key was rejected'}, 503);
   if (r.status === 400 && /credit|billing/i.test((d.error && d.error.message) || '')) return json({code: 'not_declared', message: 'No credit on the Anthropic account'}, 503);
-  if (!r.ok) return json({code: 'unavailable', message: (d.error && d.error.message) || 'Anthropic API error'}, 502);
+  if (!r.ok) return json({code: 'unavailable', message: r.status + ' ' + ((d.error && d.error.message) || 'Anthropic API error')}, 502);
   return json({text: (d.content || []).filter(c => c.type === 'text').map(c => c.text).join('')});
 };

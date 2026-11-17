@@ -502,11 +502,16 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     try { r = await fetch('/.netlify/functions/claude', {method: 'POST', signal: o.signal, headers: {'content-type': 'application/json', authorization: 'Bearer ' + session.access_token}, body: JSON.stringify({prompt, images, json: !!asJson})}); }
     catch (e) { throw {code: e && e.name === 'AbortError' ? 'cancelled' : 'unavailable'}; }
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw {code: d.code || (r.status === 404 ? 'not_declared' : 'unavailable'), message: d.message || ''};
+    if (!r.ok) {
+      const e = {code: d.code || (r.status === 404 ? 'not_declared' : 'unavailable'), message: d.message || (r.status ? 'HTTP ' + r.status : '')};
+      console.warn('invoice reading failed', r.status, e);
+      if (e.code !== 'not_declared' && typeof toast === 'function') toast('קריאת החשבונית נכשלה: ' + (e.message === 'timeout' ? 'לקח יותר מדי זמן' : e.message || e.code));
+      throw e;
+    }
     return String(d.text || '');
   }
   const sample = async (prompt, o) => { const t = await ask(prompt, o, false); if (o && o.onText) o.onText({text: t}); return t; };
-  sample.json = async (prompt, o) => { const t = await ask(prompt, o, true), m = t.match(/\{[\s\S]*\}/); if (!m) throw {code: 'bad_output'}; return JSON.parse(m[0]); };
+  sample.json = async (prompt, o) => { const t = await ask(prompt, o, true), m = t.match(/\{[\s\S]*\}/); try { if (m) return JSON.parse(m[0]); } catch (e) {} console.warn('invoice reading: no JSON in reply', t.slice(0, 300)); if (typeof toast === 'function') toast('קריאת החשבונית החזירה תשובה לא צפויה.'); throw {code: 'bad_output'}; };
   sample.limits = async () => ({images: {mediaTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif']}});
   const caps = {db, assets, downloads, user, sample};
   window.claude = {use: async n => { await ready; return caps[n] || null; }};
